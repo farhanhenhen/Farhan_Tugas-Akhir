@@ -1,0 +1,60 @@
+name: Canary Deployment Farhan
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  canary-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Build
+        run: |
+          echo "Building application..."
+          yarn build
+
+      - name: Deploy to GCP
+        uses: google-github-actions/deploy-to-gcp@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          region: ${{ secrets.GCP_REGION }}
+          zone: ${{ secrets.GCP_ZONE }}
+          machine_type: n1-standard-1
+          image: gcr.io/cloud-builders/docker
+          docker_image: ${{ steps.build.outputs.docker_image }}
+          container_name: my-app
+          service_port: 80
+
+      - name: Run Tests
+        run: |
+          echo "Running tests..."
+          yarn test
+
+      - name: Collect Metrics
+        run: |
+          echo "Collecting metrics..."
+          node ./scripts/collect-metrics.js
+
+      - name: Request Approval
+        uses: actions/github-script@v2
+        with:
+          script: |
+            github.postComment({
+              issue_number: context.issue.number,
+              body: "Please approve the canary deployment."
+            })
+
+      - name: Wait for Approval
+        uses: github/timed-trigger@v1
+        with:
+          minutes: 30
+
+      - name: Promote
+        if: ${{ steps.approval.outputs.approved == 'true' }}
+        run: |
+          echo "Promoting to production..."
+          gcloud run deploy my-app --image=gcr.io/cloud-builders/docker --platform=managed --region=${{ secrets.GCP_REGION }} --port=80
